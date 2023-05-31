@@ -8,20 +8,6 @@ import 'dotenv/config'
 import 'solidity-docgen'
 require('dotenv').config({ path: require('find-config')('.env') })
 
-const LOW_OPTIMIZER_COMPILER_SETTINGS = {
-  version: '0.7.6',
-  settings: {
-    evmVersion: 'istanbul',
-    optimizer: {
-      enabled: true,
-      runs: 2_000,
-    },
-    metadata: {
-      bytecodeHash: 'none',
-    },
-  },
-}
-
 const LOWEST_OPTIMIZER_COMPILER_SETTINGS = {
   version: '0.7.6',
   settings: {
@@ -34,19 +20,10 @@ const LOWEST_OPTIMIZER_COMPILER_SETTINGS = {
       bytecodeHash: 'none',
     },
   },
-}
-
-const DEFAULT_COMPILER_SETTINGS = {
-  version: '0.7.6',
-  settings: {
-    evmVersion: 'istanbul',
-    optimizer: {
-      enabled: true,
-      runs: 1_000_000,
-    },
-    metadata: {
-      bytecodeHash: 'none',
-    },
+  contractSizer: {
+    alphaSort: true,
+    runOnCompile: true,
+    disambiguatePaths: false,
   },
 }
 
@@ -74,6 +51,12 @@ const eth: NetworkUserConfig = {
   accounts: [process.env.KEY_ETH!],
 }
 
+const ftmTest: NetworkUserConfig = {
+  url: 'https://rpc.testnet.fantom.network',
+  chainId: 4002,
+  accounts: [process.env.KEY_TESTNET!],
+}
+
 export default {
   networks: {
     hardhat: {
@@ -84,17 +67,13 @@ export default {
     ...(process.env.KEY_GOERLI && { goerli }),
     ...(process.env.KEY_ETH && { eth }),
     // mainnet: bscMainnet,
+    testnet: ftmTest,
   },
   etherscan: {
     apiKey: process.env.ETHERSCAN_API_KEY,
   },
   solidity: {
-    compilers: [DEFAULT_COMPILER_SETTINGS],
-    overrides: {
-      'contracts/PancakeV3Pool.sol': LOWEST_OPTIMIZER_COMPILER_SETTINGS,
-      'contracts/PancakeV3PoolDeployer.sol': LOWEST_OPTIMIZER_COMPILER_SETTINGS,
-      'contracts/test/OutputCodeHash.sol': LOWEST_OPTIMIZER_COMPILER_SETTINGS,
-    },
+    compilers: [LOWEST_OPTIMIZER_COMPILER_SETTINGS],
   },
   watcher: {
     test: {

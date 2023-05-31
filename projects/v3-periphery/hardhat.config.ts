@@ -75,6 +75,12 @@ const eth: NetworkUserConfig = {
   accounts: [process.env.KEY_ETH!],
 }
 
+const ftmTest: NetworkUserConfig = {
+  url: 'https://rpc.testnet.fantom.network',
+  chainId: 4002,
+  accounts: [process.env.KEY_TESTNET!],
+}
+
 export default {
   networks: {
     hardhat: {
@@ -85,6 +91,7 @@ export default {
     ...(process.env.KEY_GOERLI && { goerli }),
     ...(process.env.KEY_ETH && { eth }),
     // mainnet: bscMainnet,
+    testnet: ftmTest,
   },
   etherscan: {
     apiKey: process.env.ETHERSCAN_API_KEY || '',

@@ -9,10 +9,10 @@ import '@pancakeswap/v3-core/contracts/interfaces/IPancakeV3Pool.sol';
 
 import './libraries/LmTick.sol';
 
-import './interfaces/IPancakeV3LmPool.sol';
+import './interfaces/IBeraV3LmPool.sol';
 import './interfaces/IMasterChefV3.sol';
 
-contract PancakeV3LmPool is IPancakeV3LmPool {
+contract PancakeV3LmPool is IBeraV3LmPool {
   using LowGasSafeMath for uint256;
   using LowGasSafeMath for int256;
   using SafeCast for uint256;

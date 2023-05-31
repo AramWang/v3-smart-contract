@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 pragma solidity =0.7.6;
 
-import './interfaces/IPancakeV3Pool.sol';
-
+import './interfaces/IBeraV3Pool.sol';
 import './libraries/LowGasSafeMath.sol';
 import './libraries/SafeCast.sol';
 import './libraries/Tick.sol';
 import './libraries/TickBitmap.sol';
 import './libraries/Position.sol';
 import './libraries/Oracle.sol';
-
 import './libraries/FullMath.sol';
 import './libraries/FixedPoint128.sol';
 import './libraries/TransferHelper.sol';
@@ -17,17 +15,16 @@ import './libraries/TickMath.sol';
 import './libraries/LiquidityMath.sol';
 import './libraries/SqrtPriceMath.sol';
 import './libraries/SwapMath.sol';
-
-import './interfaces/IPancakeV3PoolDeployer.sol';
-import './interfaces/IPancakeV3Factory.sol';
+import './interfaces/IBeraV3PoolDeployer.sol';
+import './interfaces/IBeraV3Factory.sol';
 import './interfaces/IERC20Minimal.sol';
-import './interfaces/callback/IPancakeV3MintCallback.sol';
-import './interfaces/callback/IPancakeV3SwapCallback.sol';
-import './interfaces/callback/IPancakeV3FlashCallback.sol';
+import './interfaces/callback/IBeraV3MintCallback.sol';
+import './interfaces/callback/IBeraV3SwapCallback.sol';
+import './interfaces/callback/IBeraV3FlashCallback.sol';
 
-import '@pancakeswap/v3-lm-pool/contracts/interfaces/IPancakeV3LmPool.sol';
+import '@berasleep/v3-lm-pool/contracts/interfaces/IBeraV3LmPool.sol';
 
-contract PancakeV3Pool is IPancakeV3Pool {
+contract BeraV3Pool is IBeraV3Pool {
     using LowGasSafeMath for uint256;
     using LowGasSafeMath for int256;
     using SafeCast for uint256;
@@ -38,19 +35,13 @@ contract PancakeV3Pool is IPancakeV3Pool {
     using Position for Position.Info;
     using Oracle for Oracle.Observation[65535];
 
-    /// @inheritdoc IPancakeV3PoolImmutables
     address public immutable override factory;
-    /// @inheritdoc IPancakeV3PoolImmutables
     address public immutable override token0;
-    /// @inheritdoc IPancakeV3PoolImmutables
     address public immutable override token1;
-    /// @inheritdoc IPancakeV3PoolImmutables
     uint24 public immutable override fee;
 
-    /// @inheritdoc IPancakeV3PoolImmutables
     int24 public immutable override tickSpacing;
 
-    /// @inheritdoc IPancakeV3PoolImmutables
     uint128 public immutable override maxLiquidityPerTick;
 
     uint32  internal constant PROTOCOL_FEE_SP = 65536;
@@ -58,58 +49,36 @@ contract PancakeV3Pool is IPancakeV3Pool {
     uint256 internal constant PROTOCOL_FEE_DENOMINATOR = 10000;
 
     struct Slot0 {
-        // the current price
         uint160 sqrtPriceX96;
-        // the current tick
         int24 tick;
-        // the most-recently updated index of the observations array
         uint16 observationIndex;
-        // the current maximum number of observations that are being stored
         uint16 observationCardinality;
-        // the next maximum number of observations to store, triggered in observations.write
         uint16 observationCardinalityNext;
-        // the current protocol fee for token0 and token1,
-        // 2 uint32 values store in a uint32 variable (fee/PROTOCOL_FEE_DENOMINATOR)
         uint32 feeProtocol;
-        // whether the pool is locked
         bool unlocked;
     }
-    /// @inheritdoc IPancakeV3PoolState
     Slot0 public override slot0;
-
-    /// @inheritdoc IPancakeV3PoolState
     uint256 public override feeGrowthGlobal0X128;
-    /// @inheritdoc IPancakeV3PoolState
     uint256 public override feeGrowthGlobal1X128;
 
-    // accumulated protocol fees in token0/token1 units
     struct ProtocolFees {
         uint128 token0;
         uint128 token1;
     }
-    /// @inheritdoc IPancakeV3PoolState
     ProtocolFees public override protocolFees;
 
-    /// @inheritdoc IPancakeV3PoolState
     uint128 public override liquidity;
 
-    /// @inheritdoc IPancakeV3PoolState
     mapping(int24 => Tick.Info) public override ticks;
-    /// @inheritdoc IPancakeV3PoolState
     mapping(int16 => uint256) public override tickBitmap;
-    /// @inheritdoc IPancakeV3PoolState
     mapping(bytes32 => Position.Info) public override positions;
-    /// @inheritdoc IPancakeV3PoolState
     Oracle.Observation[65535] public override observations;
 
     // liquidity mining
-    IPancakeV3LmPool public lmPool;
+    IBeraV3LmPool public lmPool;
 
     event SetLmPoolEvent(address addr);
 
-    /// @dev Mutually exclusive reentrancy protection into the pool to/from a method. This method also prevents entrance
-    /// to a function before the pool is initialized. The reentrancy guard is required throughout the contract because
-    /// we use balance checks to determine the payment status of interactions such as mint, swap and flash.
     modifier lock() {
         require(slot0.unlocked, 'LOK');
         slot0.unlocked = false;
@@ -117,36 +86,29 @@ contract PancakeV3Pool is IPancakeV3Pool {
         slot0.unlocked = true;
     }
 
-    /// @dev Prevents calling a function from anyone except the factory or its
-    /// owner
     modifier onlyFactoryOrFactoryOwner() {
-        require(msg.sender == factory || msg.sender == IPancakeV3Factory(factory).owner());
+        require(msg.sender == factory || msg.sender == IBeraV3Factory(factory).owner());
         _;
     }
 
     constructor() {
         int24 _tickSpacing;
-        (factory, token0, token1, fee, _tickSpacing) = IPancakeV3PoolDeployer(msg.sender).parameters();
+        (factory, token0, token1, fee, _tickSpacing) = IBeraV3PoolDeployer(msg.sender).parameters();
         tickSpacing = _tickSpacing;
 
         maxLiquidityPerTick = Tick.tickSpacingToMaxLiquidityPerTick(_tickSpacing);
     }
 
-    /// @dev Common checks for valid tick inputs.
     function checkTicks(int24 tickLower, int24 tickUpper) private pure {
         require(tickLower < tickUpper, 'TLU');
         require(tickLower >= TickMath.MIN_TICK, 'TLM');
         require(tickUpper <= TickMath.MAX_TICK, 'TUM');
     }
 
-    /// @dev Returns the block timestamp truncated to 32 bits, i.e. mod 2**32. This method is overridden in tests.
     function _blockTimestamp() internal view virtual returns (uint32) {
         return uint32(block.timestamp); // truncation is desired
     }
 
-    /// @dev Get the pool's balance of token0
-    /// @dev This function is gas optimized to avoid a redundant extcodesize check in addition to the returndatasize
-    /// check
     function balance0() private view returns (uint256) {
         (bool success, bytes memory data) = token0.staticcall(
             abi.encodeWithSelector(IERC20Minimal.balanceOf.selector, address(this))
@@ -155,9 +117,6 @@ contract PancakeV3Pool is IPancakeV3Pool {
         return abi.decode(data, (uint256));
     }
 
-    /// @dev Get the pool's balance of token1
-    /// @dev This function is gas optimized to avoid a redundant extcodesize check in addition to the returndatasize
-    /// check
     function balance1() private view returns (uint256) {
         (bool success, bytes memory data) = token1.staticcall(
             abi.encodeWithSelector(IERC20Minimal.balanceOf.selector, address(this))
@@ -166,7 +125,6 @@ contract PancakeV3Pool is IPancakeV3Pool {
         return abi.decode(data, (uint256));
     }
 
-    /// @inheritdoc IPancakeV3PoolDerivedState
     function snapshotCumulativesInside(int24 tickLower, int24 tickUpper)
         external
         view
@@ -242,7 +200,6 @@ contract PancakeV3Pool is IPancakeV3Pool {
         }
     }
 
-    /// @inheritdoc IPancakeV3PoolDerivedState
     function observe(uint32[] calldata secondsAgos)
         external
         view
@@ -260,7 +217,6 @@ contract PancakeV3Pool is IPancakeV3Pool {
             );
     }
 
-    /// @inheritdoc IPancakeV3PoolActions
     function increaseObservationCardinalityNext(uint16 observationCardinalityNext)
         external
         override
@@ -276,8 +232,6 @@ contract PancakeV3Pool is IPancakeV3Pool {
             emit IncreaseObservationCardinalityNext(observationCardinalityNextOld, observationCardinalityNextNew);
     }
 
-    /// @inheritdoc IPancakeV3PoolActions
-    /// @dev not locked because it initializes unlocked
     function initialize(uint160 sqrtPriceX96) external override {
         require(slot0.sqrtPriceX96 == 0, 'AI');
 
@@ -291,38 +245,30 @@ contract PancakeV3Pool is IPancakeV3Pool {
             observationIndex: 0,
             observationCardinality: cardinality,
             observationCardinalityNext: cardinalityNext,
-            feeProtocol: 209718400, // default value for all pools, 3200:3200, store 2 uint32 inside
+            feeProtocol: 209718400,
             unlocked: true
         });
 
         if (fee == 100) {
-            slot0.feeProtocol = 216272100; // value for 3300:3300, store 2 uint32 inside
+            slot0.feeProtocol = 216272100;
         } else if (fee == 500) {
-            slot0.feeProtocol = 222825800; // value for 3400:3400, store 2 uint32 inside
+            slot0.feeProtocol = 222825800;
         } else if (fee == 2500) {
-            slot0.feeProtocol = 209718400; // value for 3200:3200, store 2 uint32 inside
+            slot0.feeProtocol = 209718400;
         } else if (fee == 10000) {
-            slot0.feeProtocol = 209718400; // value for 3200:3200, store 2 uint32 inside
+            slot0.feeProtocol = 209718400;
         }
 
         emit Initialize(sqrtPriceX96, tick);
     }
 
     struct ModifyPositionParams {
-        // the address that owns the position
         address owner;
-        // the lower and upper tick of the position
         int24 tickLower;
         int24 tickUpper;
-        // any change in liquidity
         int128 liquidityDelta;
     }
 
-    /// @dev Effect some changes to a position
-    /// @param params the position details and the change to the position's liquidity to effect
-    /// @return position a storage pointer referencing the position with the given owner and tick range
-    /// @return amount0 the amount of token0 owed to the pool, negative if the pool should pay the recipient
-    /// @return amount1 the amount of token1 owed to the pool, negative if the pool should pay the recipient
     function _modifyPosition(ModifyPositionParams memory params)
         private
         returns (
@@ -333,7 +279,7 @@ contract PancakeV3Pool is IPancakeV3Pool {
     {
         checkTicks(params.tickLower, params.tickUpper);
 
-        Slot0 memory _slot0 = slot0; // SLOAD for gas optimization
+        Slot0 memory _slot0 = slot0;
 
         position = _updatePosition(
             params.owner,
@@ -345,18 +291,14 @@ contract PancakeV3Pool is IPancakeV3Pool {
 
         if (params.liquidityDelta != 0) {
             if (_slot0.tick < params.tickLower) {
-                // current tick is below the passed range; liquidity can only become in range by crossing from left to
-                // right, when we'll need _more_ token0 (it's becoming more valuable) so user must provide it
                 amount0 = SqrtPriceMath.getAmount0Delta(
                     TickMath.getSqrtRatioAtTick(params.tickLower),
                     TickMath.getSqrtRatioAtTick(params.tickUpper),
                     params.liquidityDelta
                 );
             } else if (_slot0.tick < params.tickUpper) {
-                // current tick is inside the passed range
-                uint128 liquidityBefore = liquidity; // SLOAD for gas optimization
+                uint128 liquidityBefore = liquidity;
 
-                // write an oracle entry
                 (slot0.observationIndex, slot0.observationCardinality) = observations.write(
                     _slot0.observationIndex,
                     _blockTimestamp(),
@@ -379,8 +321,6 @@ contract PancakeV3Pool is IPancakeV3Pool {
 
                 liquidity = LiquidityMath.addDelta(liquidityBefore, params.liquidityDelta);
             } else {
-                // current tick is above the passed range; liquidity can only become in range by crossing from right to
-                // left, when we'll need _more_ token1 (it's becoming more valuable) so user must provide it
                 amount1 = SqrtPriceMath.getAmount1Delta(
                     TickMath.getSqrtRatioAtTick(params.tickLower),
                     TickMath.getSqrtRatioAtTick(params.tickUpper),
@@ -390,11 +330,6 @@ contract PancakeV3Pool is IPancakeV3Pool {
         }
     }
 
-    /// @dev Gets and updates a position with the given liquidity delta
-    /// @param owner the owner of the position
-    /// @param tickLower the lower tick of the position's tick range
-    /// @param tickUpper the upper tick of the position's tick range
-    /// @param tick the current tick, passed to avoid sloads
     function _updatePosition(
         address owner,
         int24 tickLower,
@@ -404,10 +339,9 @@ contract PancakeV3Pool is IPancakeV3Pool {
     ) private returns (Position.Info storage position) {
         position = positions.get(owner, tickLower, tickUpper);
 
-        uint256 _feeGrowthGlobal0X128 = feeGrowthGlobal0X128; // SLOAD for gas optimization
-        uint256 _feeGrowthGlobal1X128 = feeGrowthGlobal1X128; // SLOAD for gas optimization
+        uint256 _feeGrowthGlobal0X128 = feeGrowthGlobal0X128;
+        uint256 _feeGrowthGlobal1X128 = feeGrowthGlobal1X128;
 
-        // if we need to update the ticks, do it
         bool flippedLower;
         bool flippedUpper;
         if (liquidityDelta != 0) {
@@ -475,8 +409,6 @@ contract PancakeV3Pool is IPancakeV3Pool {
         }
     }
 
-    /// @inheritdoc IPancakeV3PoolActions
-    /// @dev noDelegateCall is applied indirectly via _modifyPosition
     function mint(
         address recipient,
         int24 tickLower,
@@ -501,14 +433,13 @@ contract PancakeV3Pool is IPancakeV3Pool {
         uint256 balance1Before;
         if (amount0 > 0) balance0Before = balance0();
         if (amount1 > 0) balance1Before = balance1();
-        IPancakeV3MintCallback(msg.sender).pancakeV3MintCallback(amount0, amount1, data);
+        IBeraV3MintCallback(msg.sender).beraV3MintCallback(amount0, amount1, data);
         if (amount0 > 0) require(balance0Before.add(amount0) <= balance0(), 'M0');
         if (amount1 > 0) require(balance1Before.add(amount1) <= balance1(), 'M1');
 
         emit Mint(msg.sender, recipient, tickLower, tickUpper, amount, amount0, amount1);
     }
 
-    /// @inheritdoc IPancakeV3PoolActions
     function collect(
         address recipient,
         int24 tickLower,
@@ -516,7 +447,6 @@ contract PancakeV3Pool is IPancakeV3Pool {
         uint128 amount0Requested,
         uint128 amount1Requested
     ) external override lock returns (uint128 amount0, uint128 amount1) {
-        // we don't need to checkTicks here, because invalid positions will never have non-zero tokensOwed{0,1}
         Position.Info storage position = positions.get(msg.sender, tickLower, tickUpper);
 
         amount0 = amount0Requested > position.tokensOwed0 ? position.tokensOwed0 : amount0Requested;
@@ -534,8 +464,6 @@ contract PancakeV3Pool is IPancakeV3Pool {
         emit Collect(msg.sender, recipient, tickLower, tickUpper, amount0, amount1);
     }
 
-    /// @inheritdoc IPancakeV3PoolActions
-    /// @dev noDelegateCall is applied indirectly via _modifyPosition
     function burn(
         int24 tickLower,
         int24 tickUpper,
@@ -564,56 +492,34 @@ contract PancakeV3Pool is IPancakeV3Pool {
     }
 
     struct SwapCache {
-        // the protocol fee for the input token
         uint32 feeProtocol;
-        // liquidity at the beginning of the swap
         uint128 liquidityStart;
-        // the timestamp of the current block
         uint32 blockTimestamp;
-        // the current value of the tick accumulator, computed only if we cross an initialized tick
         int56 tickCumulative;
-        // the current value of seconds per liquidity accumulator, computed only if we cross an initialized tick
         uint160 secondsPerLiquidityCumulativeX128;
-        // whether we've computed and cached the above two accumulators
         bool computedLatestObservation;
     }
 
-    // the top level state of the swap, the results of which are recorded in storage at the end
     struct SwapState {
-        // the amount remaining to be swapped in/out of the input/output asset
         int256 amountSpecifiedRemaining;
-        // the amount already swapped out/in of the output/input asset
         int256 amountCalculated;
-        // current sqrt(price)
         uint160 sqrtPriceX96;
-        // the tick associated with the current price
         int24 tick;
-        // the global fee growth of the input token
         uint256 feeGrowthGlobalX128;
-        // amount of input token paid as protocol fee
         uint128 protocolFee;
-        // the current liquidity in range
         uint128 liquidity;
     }
 
     struct StepComputations {
-        // the price at the beginning of the step
         uint160 sqrtPriceStartX96;
-        // the next tick to swap to from the current tick in the swap direction
         int24 tickNext;
-        // whether tickNext is initialized or not
         bool initialized;
-        // sqrt(price) for the next tick (1/0)
         uint160 sqrtPriceNextX96;
-        // how much is being swapped in in this step
         uint256 amountIn;
-        // how much is being swapped out
         uint256 amountOut;
-        // how much fee is being paid in
         uint256 feeAmount;
     }
 
-    /// @inheritdoc IPancakeV3PoolActions
     function swap(
         address recipient,
         bool zeroForOne,
@@ -660,7 +566,6 @@ contract PancakeV3Pool is IPancakeV3Pool {
             liquidity: cache.liquidityStart
         });
 
-        // continue swapping as long as we haven't used the entire input/output and haven't reached the price limit
         while (state.amountSpecifiedRemaining != 0 && state.sqrtPriceX96 != sqrtPriceLimitX96) {
             StepComputations memory step;
 
@@ -672,17 +577,14 @@ contract PancakeV3Pool is IPancakeV3Pool {
                 zeroForOne
             );
 
-            // ensure that we do not overshoot the min/max tick, as the tick bitmap is not aware of these bounds
             if (step.tickNext < TickMath.MIN_TICK) {
                 step.tickNext = TickMath.MIN_TICK;
             } else if (step.tickNext > TickMath.MAX_TICK) {
                 step.tickNext = TickMath.MAX_TICK;
             }
 
-            // get the price for the next tick
             step.sqrtPriceNextX96 = TickMath.getSqrtRatioAtTick(step.tickNext);
 
-            // compute values to swap to the target tick, price limit, or point where input/output amount is exhausted
             (state.sqrtPriceX96, step.amountIn, step.amountOut, step.feeAmount) = SwapMath.computeSwapStep(
                 state.sqrtPriceX96,
                 (zeroForOne ? step.sqrtPriceNextX96 < sqrtPriceLimitX96 : step.sqrtPriceNextX96 > sqrtPriceLimitX96)
@@ -701,23 +603,17 @@ contract PancakeV3Pool is IPancakeV3Pool {
                 state.amountCalculated = state.amountCalculated.add((step.amountIn + step.feeAmount).toInt256());
             }
 
-            // if the protocol fee is on, calculate how much is owed, decrement feeAmount, and increment protocolFee
             if (cache.feeProtocol > 0) {
                 uint256 delta = (step.feeAmount.mul(cache.feeProtocol)) / PROTOCOL_FEE_DENOMINATOR;
                 step.feeAmount -= delta;
                 state.protocolFee += uint128(delta);
             }
 
-            // update global fee tracker
             if (state.liquidity > 0)
                 state.feeGrowthGlobalX128 += FullMath.mulDiv(step.feeAmount, FixedPoint128.Q128, state.liquidity);
 
-            // shift tick if we reached the next price
             if (state.sqrtPriceX96 == step.sqrtPriceNextX96) {
-                // if the tick is initialized, run the tick transition
                 if (step.initialized) {
-                    // check for the placeholder value, which we replace with the actual value the first time the swap
-                    // crosses an initialized tick
                     if (!cache.computedLatestObservation) {
                         (cache.tickCumulative, cache.secondsPerLiquidityCumulativeX128) = observations.observeSingle(
                             cache.blockTimestamp,
@@ -742,8 +638,6 @@ contract PancakeV3Pool is IPancakeV3Pool {
                         cache.tickCumulative,
                         cache.blockTimestamp
                     );
-                    // if we're moving leftward, we interpret liquidityNet as the opposite sign
-                    // safe because liquidityNet cannot be type(int128).min
                     if (zeroForOne) liquidityNet = -liquidityNet;
 
                     state.liquidity = LiquidityMath.addDelta(state.liquidity, liquidityNet);
@@ -751,12 +645,10 @@ contract PancakeV3Pool is IPancakeV3Pool {
 
                 state.tick = zeroForOne ? step.tickNext - 1 : step.tickNext;
             } else if (state.sqrtPriceX96 != step.sqrtPriceStartX96) {
-                // recompute unless we're on a lower tick boundary (i.e. already transitioned ticks), and haven't moved
                 state.tick = TickMath.getTickAtSqrtRatio(state.sqrtPriceX96);
             }
         }
 
-        // update tick and write an oracle entry if the tick change
         if (state.tick != slot0Start.tick) {
             (uint16 observationIndex, uint16 observationCardinality) = observations.write(
                 slot0Start.observationIndex,
@@ -783,8 +675,6 @@ contract PancakeV3Pool is IPancakeV3Pool {
         uint128 protocolFeesToken0 = 0;
         uint128 protocolFeesToken1 = 0;
 
-        // update fee growth global and, if necessary, protocol fees
-        // overflow is acceptable, protocol has to withdraw before it hits type(uint128).max fees
         if (zeroForOne) {
             feeGrowthGlobal0X128 = state.feeGrowthGlobalX128;
             if (state.protocolFee > 0) protocolFees.token0 += state.protocolFee;
@@ -804,13 +694,13 @@ contract PancakeV3Pool is IPancakeV3Pool {
             if (amount1 < 0) TransferHelper.safeTransfer(token1, recipient, uint256(-amount1));
 
             uint256 balance0Before = balance0();
-            IPancakeV3SwapCallback(msg.sender).pancakeV3SwapCallback(amount0, amount1, data);
+            IBeraV3SwapCallback(msg.sender).beraV3SwapCallback(amount0, amount1, data);
             require(balance0Before.add(uint256(amount0)) <= balance0(), 'IIA');
         } else {
             if (amount0 < 0) TransferHelper.safeTransfer(token0, recipient, uint256(-amount0));
 
             uint256 balance1Before = balance1();
-            IPancakeV3SwapCallback(msg.sender).pancakeV3SwapCallback(amount0, amount1, data);
+            IBeraV3SwapCallback(msg.sender).beraV3SwapCallback(amount0, amount1, data);
             require(balance1Before.add(uint256(amount1)) <= balance1(), 'IIA');
         }
 
@@ -818,7 +708,7 @@ contract PancakeV3Pool is IPancakeV3Pool {
         slot0.unlocked = true;
     }
 
-    /// @inheritdoc IPancakeV3PoolActions
+    /// @inheritdoc IBeraV3PoolActions
     function flash(
         address recipient,
         uint256 amount0,
@@ -836,7 +726,7 @@ contract PancakeV3Pool is IPancakeV3Pool {
         if (amount0 > 0) TransferHelper.safeTransfer(token0, recipient, amount0);
         if (amount1 > 0) TransferHelper.safeTransfer(token1, recipient, amount1);
 
-        IPancakeV3FlashCallback(msg.sender).pancakeV3FlashCallback(fee0, fee1, data);
+        IBeraV3FlashCallback(msg.sender).beraV3FlashCallback(fee0, fee1, data);
 
         uint256 balance0After = balance0();
         uint256 balance1After = balance1();
@@ -864,7 +754,7 @@ contract PancakeV3Pool is IPancakeV3Pool {
         emit Flash(msg.sender, recipient, amount0, amount1, paid0, paid1);
     }
 
-    /// @inheritdoc IPancakeV3PoolOwnerActions
+    /// @inheritdoc IBeraV3PoolOwnerActions
     function setFeeProtocol(uint32 feeProtocol0, uint32 feeProtocol1) external override lock onlyFactoryOrFactoryOwner {
         require(
             (feeProtocol0 == 0 || (feeProtocol0 >= 1000 && feeProtocol0 <= 4000)) &&
@@ -876,7 +766,7 @@ contract PancakeV3Pool is IPancakeV3Pool {
         emit SetFeeProtocol(feeProtocolOld % PROTOCOL_FEE_SP, feeProtocolOld >> 16, feeProtocol0, feeProtocol1);
     }
 
-    /// @inheritdoc IPancakeV3PoolOwnerActions
+    /// @inheritdoc IBeraV3PoolOwnerActions
     function collectProtocol(
         address recipient,
         uint128 amount0Requested,
@@ -900,7 +790,7 @@ contract PancakeV3Pool is IPancakeV3Pool {
     }
 
     function setLmPool(address _lmPool) external override onlyFactoryOrFactoryOwner {
-      lmPool = IPancakeV3LmPool(_lmPool);
+      lmPool = IBeraV3LmPool(_lmPool);
       emit SetLmPoolEvent(address(_lmPool));
     }
 }

@@ -2,8 +2,7 @@ import bn from 'bignumber.js'
 import { Contract, ContractFactory, utils, BigNumber } from 'ethers'
 import { ethers, upgrades, network } from 'hardhat'
 import { linkLibraries } from '../util/linkLibraries'
-import { tryVerify } from '@pancakeswap/common/verify'
-import { configs } from '@pancakeswap/common/config'
+import { configs } from '@berasleep/common/config'
 import fs from 'fs'
 
 type ContractJson = { abi: any; bytecode: string }
